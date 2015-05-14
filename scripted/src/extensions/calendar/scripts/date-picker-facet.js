@@ -24,7 +24,9 @@ Exhibit.DatePickerFacet = function(containerElmt, uiContext) {
 Exhibit.DatePickerFacet._settingsSpecs = {
     "facetLabel":       { type: "text" },
     "dateFormat":       { type: "text" },
-    "displayDate":      { type: "text" }
+    "displayDate":      { type: "text" },
+    "acceptLists":      { type: "boolean" },
+    "invert":           { type: "boolean" }
 };
 
 Exhibit.DatePickerFacet.create = function(configuration, containerElmt, uiContext) {
@@ -168,7 +170,41 @@ Exhibit.DatePickerFacet.prototype.applyRestrictions = function(restrictions) {
   this.setRange(restrictions);
 };
 
+Exhibit.DatePickerFacet.prototype.passesRestriction = function(min, max, beginDateVal, endDateVal, item) {
+  // Check the date to see if they are in range, add them to the set if so
+  var beginDate, endDate;
+
+  if (typeof beginDateVal == 'object') {
+    if (beginDateVal.size == 0) return false;
+    beginDate = SimileAjax.DateTime.parseIso8601DateTime(beginDateVal.values.toArray()[0]);
+  } else {
+    if (beginDateVal.length > 0) {
+      beginDate = SimileAjax.DateTime.parseIso8601DateTime(beginDateVal);
+    } else {
+      return false;
+    }
+  }
+
+  if (typeof endDateVal == 'object') {
+    if (beginDateVal.size == 0) { 
+      endDate = beginDate 
+    } else {
+      endDate = SimileAjax.DateTime.parseIso8601DateTime(endDateVal.values.toArray()[0]);
+    }
+  } else {
+    if (endDateVal.length > 0) {
+      endDate = SimileAjax.DateTime.parseIso8601DateTime(endDateVal);
+    } else {
+      endDate = beginDate
+    }
+  }
+
+  return ((beginDate <= max) && (endDate >= min));
+};
+
 Exhibit.DatePickerFacet.prototype.restrict = function(items) {
+    var self = this;
+
     if (!this.hasRestrictions()) {
       this._dom.setSelectionCount(this.hasRestrictions(), 0);
       return items;
@@ -190,40 +226,62 @@ Exhibit.DatePickerFacet.prototype.restrict = function(items) {
         var beginDateExpression = this._beginDate;
         var endDateExpression = this._endDate;
         
+        var acceptLists = (("acceptLists" in this._settings) && (this._settings["acceptLists"] === true));
+        var invert = (("invert" in this._settings) && (this._settings["invert"] === true));
         var set = new Exhibit.Set();
         
         // Round max up a day
         SimileAjax.DateTime.incrementByInterval(max, SimileAjax.DateTime.DAY);
         
         // Check each item in the db
-        items.visit(function(item) {
-            
+        items.visit(
+          function(item) {          
             // Capture the date values
             var beginDateVal = beginDateExpression.evaluateOnItem(item, database);
             var endDateVal = endDateExpression.evaluateOnItem(item, database);
             
-            // Check the date to see if they are in range, add them to the set if so
-            if (beginDateVal.size > 0) {
-    var beginDate = SimileAjax.DateTime.parseIso8601DateTime(beginDateVal.values.toArray()[0]);
+            if (acceptLists) {
+              // We're dealing with a set of dates for this point, not a single one.
 
-    var endDate = (endDateVal.size > 0)?
-        SimileAjax.DateTime.parseIso8601DateTime(endDateVal.values.toArray()[0]) 
-        : beginDate;
-
-    //add if data interval overlaps query interval
-    if ((beginDate <= max) && (endDate >= min))
-                    set.add(item);
+              beginDateVal = beginDateVal.values.toArray()[0]
+              endDateVal = endDateVal.values.toArray()[0]
+              
+              var beginDateVals, endDateVals;
+              try {
+                beginDateVals = beginDateVal.split(',');
+              } catch(e) {
+                beginDateVals = []
+              }
+              try {
+                endDateVals = endDateVal.split(',');
+              } catch(e) {
+                endDateVals = []
+              }
+              var passes = false;
+              console.log(beginDateVal, beginDateVals, endDateVal, endDateVals);
+              for (var i = 0; i < beginDateVals.length; i++) {
+                var ed = beginDateVals[i];
+                if (i < endDateVals.length) ed = endDateVals[i];
+                passes = passes || self.passesRestriction(min, max, beginDateVals[i], ed, item);
+              }
+              if ((passes && (!invert)) || ((!passes) && invert)) {
+                set.add(item);
+              }             
+            } else {
+              var passes = self.passesRestriction(min, max, beginDateVal, endDateVal, item)
+              if ((passes && (!invert)) || ((!passes) && invert)) {
+                set.add(item);
+              }             
             }
-        });
-        
+          }
+        );
         return set;
       }
       else {
-        // Only using begin date
         var path = this._beginDate.getPath();
         var set = new Exhibit.Set();
         set.addSet(path.rangeBackward(min, max.setUTCDate(max.getUTCDate() + 1), false, items, database).values);
-        return set; 
+        return set;           
       }
     }
 };
